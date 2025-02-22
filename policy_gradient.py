@@ -380,25 +380,32 @@ class BaseFinetuner:
         return avg_loss
 
     def supervised_training_plot(self):
-        """Plot the supervised training loss curve."""
+        """Plot the supervised training loss curve with weighted moving average."""
         plt.figure(figsize=(8, 4))
         plt.plot(self.supervised_loss_history, marker='o', label='Supervised Training Loss')
+        if len(self.supervised_loss_history) >= 5:
+            weighted_avg = np.convolve(self.supervised_loss_history, np.ones(5) / 5, mode='valid')
+            plt.plot(np.arange(4, len(self.supervised_loss_history)), weighted_avg, color='red',
+                     label='Weighted Avg (5 epochs)')
         plt.xlabel("Epoch")
         plt.ylabel("Loss")
         plt.title("Supervised Training Loss")
         plt.legend()
         plt.show()
-
     def rl_finetuning_generic_plot(self):
-        """Plot the RL fine-tuning reward curve."""
+        """Plot the RL fine-tuning reward curve with weighted moving average."""
         plt.figure(figsize=(8, 4))
         plt.plot(self.rl_reward_history, marker='o', label='RL Finetuning Reward')
+        if len(self.rl_reward_history) >= 10:
+            weighted_avg = np.convolve(self.rl_reward_history, np.ones(10) / 10, mode='valid')
+            # Adjust the x-axis indices for the moving average line
+            plt.plot(np.arange(9, len(self.rl_reward_history)), weighted_avg, color='red',
+                     label='Weighted Avg (10 episodes)')
         plt.xlabel("Episode")
         plt.ylabel("Episode Reward")
         plt.title("RL Finetuning Reward")
         plt.legend()
         plt.show()
-
 
 # --------------------------------------------------
 # Agent-Specific Finetuners
@@ -431,7 +438,7 @@ if __name__ == '__main__':
     print("\n--- Training with PPOAgent ---")
     ppo_agent = PPOAgent(state_dim, action_dim)
     ppo_finetuner = PPOFinetuner(ppo_agent, (expert_states, expert_actions), batch_size=32)
-    ppo_finetuner.train_model(supervised_epochs=1000, rl_episodes=5000)
+    ppo_finetuner.train_model(supervised_epochs=10, rl_episodes=5000)
     ppo_finetuner.evaluate_model()
     ppo_finetuner.supervised_training_plot()
     ppo_finetuner.rl_finetuning_generic_plot()
@@ -442,7 +449,7 @@ if __name__ == '__main__':
     print("\n--- Training with GRPOAgent ---")
     grpo_agent = GRPOAgent(state_dim, action_dim, lambda_grad=1e-3)
     grpo_finetuner = GRPOFinetuner(grpo_agent, (expert_states, expert_actions), batch_size=32)
-    grpo_finetuner.train_model(supervised_epochs=1000, rl_episodes=5000)
+    grpo_finetuner.train_model(supervised_epochs=10, rl_episodes=5000)
     grpo_finetuner.evaluate_model()
     grpo_finetuner.supervised_training_plot()
     grpo_finetuner.rl_finetuning_generic_plot()
