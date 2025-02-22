@@ -10,6 +10,36 @@ np.bool8 = np.bool_
 
 
 # --------------------------------------------------
+# Function to Generate Real Expert Data from CartPole
+# --------------------------------------------------
+def generate_expert_data(env, num_episodes=100, max_timesteps=500):
+    """
+    Runs an expert policy on the CartPole environment to collect
+    state and expert action pairs.
+    The expert policy here is a simple heuristic:
+      if pole angle > 0 then action = 1, else action = 0.
+    """
+    states = []
+    actions = []
+    for episode in range(num_episodes):
+        # Handle gym.reset() tuple (gym>=0.26) if needed
+        reset_out = env.reset()
+        state = reset_out[0] if isinstance(reset_out, tuple) else reset_out
+        for t in range(max_timesteps):
+            # Expert policy based on the pole angle (index 2 of state)
+            action = 1 if state[2] > 0 else 0
+            states.append(state)
+            actions.append(action)
+            next_state, reward, done, *_ = env.step(action)
+            state = next_state
+            if done:
+                break
+    states = torch.tensor(states, dtype=torch.float32)
+    actions = torch.tensor(actions, dtype=torch.long)
+    return states, actions
+
+
+# --------------------------------------------------
 # Core Modules: Actor, Critic, Memory
 # --------------------------------------------------
 class Actor(nn.Module):
@@ -72,10 +102,9 @@ class PPOAgent:
         self.actor_old.load_state_dict(self.actor.state_dict())
 
     def select_action(self, state):
-        # Handle tuple from env.reset() (gym>=0.26)
+        # Unpack tuple from env.reset() if needed
         if isinstance(state, tuple):
             state = state[0]
-        # Convert to tensor (using np.array to avoid performance warnings)
         state = torch.FloatTensor(np.array(state)).unsqueeze(0)
         logits = self.actor_old(state)
         probs = torch.softmax(logits, dim=-1)
@@ -102,12 +131,10 @@ class PPOAgent:
         return kl.mean()
 
     def update(self, memory, K_epochs=4):
-        # Convert lists to tensors
         states = torch.FloatTensor(np.array(memory.states))
         actions = torch.LongTensor(memory.actions)
         old_logprobs = torch.FloatTensor(memory.logprobs)
 
-        # Compute discounted rewards
         discounted_rewards = []
         reward_sum = 0
         for reward, is_terminal in zip(reversed(memory.rewards), reversed(memory.is_terminals)):
@@ -201,13 +228,14 @@ class GRPOAgent(PPOAgent):
 
 
 # --------------------------------------------------
-# BaseFinetuner: Fine-Grained Modular Functions for Supervised & RL Finetuning
+# BaseFinetuner: Modular Functions for Supervised & RL Finetuning
 # --------------------------------------------------
 class BaseFinetuner:
     def __init__(self, agent, supervised_data, batch_size=32, validation_split=0.2):
         """
         agent: instance of PPOAgent or GRPOAgent
         supervised_data: tuple (inputs, targets) as tensors for supervised training
+        In this case, targets are the expert action labels.
         """
         self.agent = agent
         self.inputs, self.targets = supervised_data
@@ -218,7 +246,6 @@ class BaseFinetuner:
         self.supervised_loss_history = []
         self.rl_reward_history = []
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        # Move models to device
         self.agent.actor.to(self.device)
         self.agent.critic.to(self.device)
 
@@ -244,25 +271,19 @@ class BaseFinetuner:
 
     def default_reward_function(self, predictions, targets):
         """
-        Compute a default reward based on negative MSE loss.
+        Compute a default reward based on negative cross entropy loss.
         Higher reward corresponds to lower error.
         """
-        loss = nn.MSELoss()(predictions, targets.to(predictions.device))
+        loss = nn.CrossEntropyLoss()(predictions, targets.to(predictions.device))
         return -loss
 
     def sample_group_info(self, data, group_size=10):
-        """
-        Dummy implementation for sampling group information.
-        Replace with actual group-specific logic as needed.
-        """
+        """Dummy implementation for sampling group information."""
         indices = torch.randperm(len(data))[:group_size]
         return indices
 
     def compute_advantages(self, rewards, values):
-        """
-        Compute advantage estimates.
-        Simple implementation: advantage = reward - value.
-        """
+        """Simple advantage: reward - value."""
         advantages = rewards - values.detach()
         return advantages
 
@@ -277,10 +298,7 @@ class BaseFinetuner:
         return self.agent.compute_kl(states)
 
     def rl_finetuning_generic(self, env_name='CartPole-v1', num_episodes=300, update_timestep=2000):
-        """
-        Perform RL fine-tuning in a generic environment.
-        Uses the agent's own update method.
-        """
+        """Perform RL fine-tuning using the agent's update method."""
         env = gym.make(env_name)
         memory = Memory()
         timestep = 0
@@ -315,12 +333,11 @@ class BaseFinetuner:
                 print(f"[RL Finetuning] Episode {episode} Average Reward: {avg_reward:.2f}")
 
     def supervised_training(self, num_epochs=20, learning_rate=1e-3):
-        """
-        Perform supervised training on the provided dataset.
-        """
+        """Perform supervised training using real expert data."""
         self.prepare_dataloaders()
         optimizer = optim.Adam(self.agent.actor.parameters(), lr=learning_rate)
-        loss_fn = nn.MSELoss()
+        # Use CrossEntropyLoss for classification (expert actions)
+        loss_fn = nn.CrossEntropyLoss()
         self.supervised_loss_history = []
 
         for epoch in range(1, num_epochs + 1):
@@ -339,21 +356,17 @@ class BaseFinetuner:
             print(f"[Supervised Training] Epoch {epoch}: Loss = {avg_loss:.4f}")
 
     def train_model(self, supervised_epochs=20, rl_episodes=300):
-        """
-        Train the model by first performing supervised training and then RL fine-tuning.
-        """
+        """Train with supervised training first, then RL fine-tuning."""
         print("Starting supervised training...")
         self.supervised_training(num_epochs=supervised_epochs)
         print("Starting RL fine-tuning...")
         self.rl_finetuning_generic(num_episodes=rl_episodes)
 
     def evaluate_model(self):
-        """
-        Evaluate the model on the validation set and return the average loss.
-        """
+        """Evaluate the model on the validation set using cross entropy loss."""
         self.agent.actor.eval()
         losses = []
-        loss_fn = nn.MSELoss()
+        loss_fn = nn.CrossEntropyLoss()
         with torch.no_grad():
             for batch_inputs, batch_targets in self.val_loader:
                 batch_inputs = batch_inputs.to(self.device)
@@ -391,42 +404,34 @@ class BaseFinetuner:
 # Agent-Specific Finetuners
 # --------------------------------------------------
 class PPOFinetuner(BaseFinetuner):
-    """
-    Finetuner for PPOAgent.
-    Inherits all modular functions from BaseFinetuner.
-    """
+    """Finetuner for PPOAgent."""
     pass
 
 
 class GRPOFinetuner(BaseFinetuner):
-    """
-    Finetuner for GRPOAgent.
-    Inherits all modular functions from BaseFinetuner.
-    """
+    """Finetuner for GRPOAgent."""
     pass
 
 
 # --------------------------------------------------
-# Example Usage: Training and Evaluation with PPO and GRPO
+# Example Usage: Training with PPO and GRPO using Real Expert Data
 # --------------------------------------------------
 if __name__ == '__main__':
-    # Create environment to extract dimensions
+    # Create the CartPole environment to get dimensions and generate expert data
     env = gym.make('CartPole-v1')
     state_dim = env.observation_space.shape[0]
     action_dim = env.action_space.n
 
-    # Dummy supervised data (replace with your own data as needed)
-    num_samples = 500
-    supervised_inputs = torch.randn(num_samples, state_dim)
-    supervised_targets = torch.randn(num_samples, action_dim)
+    # Generate real expert data from CartPole using our expert policy
+    expert_states, expert_actions = generate_expert_data(env, num_episodes=100, max_timesteps=500)
 
     # ----------------------------
     # Example with PPOAgent
     # ----------------------------
     print("\n--- Training with PPOAgent ---")
     ppo_agent = PPOAgent(state_dim, action_dim)
-    ppo_finetuner = PPOFinetuner(ppo_agent, (supervised_inputs, supervised_targets), batch_size=32)
-    ppo_finetuner.train_model(supervised_epochs=10, rl_episodes=5000)
+    ppo_finetuner = PPOFinetuner(ppo_agent, (expert_states, expert_actions), batch_size=32)
+    ppo_finetuner.train_model(supervised_epochs=1000, rl_episodes=5000)
     ppo_finetuner.evaluate_model()
     ppo_finetuner.supervised_training_plot()
     ppo_finetuner.rl_finetuning_generic_plot()
@@ -436,8 +441,8 @@ if __name__ == '__main__':
     # ----------------------------
     print("\n--- Training with GRPOAgent ---")
     grpo_agent = GRPOAgent(state_dim, action_dim, lambda_grad=1e-3)
-    grpo_finetuner = GRPOFinetuner(grpo_agent, (supervised_inputs, supervised_targets), batch_size=32)
-    grpo_finetuner.train_model(supervised_epochs=10, rl_episodes=5000)
+    grpo_finetuner = GRPOFinetuner(grpo_agent, (expert_states, expert_actions), batch_size=32)
+    grpo_finetuner.train_model(supervised_epochs=1000, rl_episodes=5000)
     grpo_finetuner.evaluate_model()
     grpo_finetuner.supervised_training_plot()
     grpo_finetuner.rl_finetuning_generic_plot()
