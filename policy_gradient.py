@@ -34,8 +34,8 @@ def generate_expert_data(env, num_episodes=100, max_timesteps=500):
             state = next_state
             if done:
                 break
-    states = torch.tensor(states, dtype=torch.float32)
-    actions = torch.tensor(actions, dtype=torch.long)
+    states = torch.tensor(np.stack(states), dtype=torch.float32)
+    actions = torch.tensor(np.array(actions), dtype=torch.long)
     return states, actions
 
 
@@ -131,7 +131,7 @@ class PPOAgent:
         return kl.mean()
 
     def update(self, memory, K_epochs=4):
-        states = torch.FloatTensor(np.array(memory.states))
+        states = torch.tensor(np.stack(memory.states), dtype=torch.float32)
         actions = torch.LongTensor(memory.actions)
         old_logprobs = torch.FloatTensor(memory.logprobs)
 
@@ -191,7 +191,7 @@ class GRPOAgent(PPOAgent):
         return grad_penalty
 
     def update(self, memory, K_epochs=4):
-        states = torch.FloatTensor(np.array(memory.states))
+        states = torch.tensor(np.stack(memory.states), dtype=torch.float32)
         actions = torch.LongTensor(memory.actions)
         old_logprobs = torch.FloatTensor(memory.logprobs)
 
